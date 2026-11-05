@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>出演映画しらべ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f1e6c8; --paper:#fbf4de; --ink:#33291f; --sub:#6d5f4b;
+  --teal:#1f6f6b; --teal-ink:#fbf4de; --mustard:#d9a21b; --line:#b9a77f;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#1d2a29; --paper:#263635; --ink:#f0e6c8; --sub:#b7ab8c; --teal:#5fb3ab; --teal-ink:#14201f; --mustard:#e7b73a; --line:#4a5e5b;}
+}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 "Zen Kaku Gothic New",system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:20px 16px 48px}
+h1{font:400 clamp(28px,8vw,40px)/1.2 "DotGothic16",monospace;margin:8px 0 4px;color:var(--teal)}
+.lead{margin:0 0 20px;color:var(--sub);font-size:14px}
+form{display:flex;gap:8px}
+input{flex:1;min-width:0;font:inherit;font-size:18px;padding:12px 14px;background:var(--paper);color:var(--ink);border:2px solid var(--ink);border-radius:4px}
+input:focus-visible,button:focus-visible,a:focus-visible{outline:3px solid var(--mustard);outline-offset:2px}
+button{font:700 16px "Zen Kaku Gothic New",sans-serif;padding:0 18px;background:var(--teal);color:var(--teal-ink);border:2px solid var(--ink);border-radius:4px;box-shadow:3px 3px 0 var(--ink);cursor:pointer}
+button:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+button:disabled{opacity:.6}
+.cands{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
+.cands button{font-weight:400;font-size:14px;padding:4px 10px;background:var(--paper);color:var(--ink);box-shadow:none;border-width:1px;border-radius:99px}
+.cands button[aria-pressed=true]{background:var(--mustard);color:#33291f;font-weight:700}
+.status{margin:20px 0;color:var(--sub)}
+.ticket{margin-top:20px;background:var(--paper);border:2px solid var(--ink);border-radius:6px;overflow:hidden}
+.ticket header{padding:14px 16px;background:var(--teal);color:var(--teal-ink);display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.ticket h2{font:400 22px/1.3 "DotGothic16",monospace;margin:0}
+.ticket header span{font-size:13px}
+.tools{display:flex;gap:8px;align-items:center;padding:10px 16px;border-bottom:2px dashed var(--line);font-size:14px}
+.tools a{color:var(--teal);margin-right:auto}
+.tools button{font-size:13px;padding:4px 12px;box-shadow:none;border-width:1px;background:var(--mustard);color:#33291f}
+ol{list-style:none;margin:0;padding:0}
+li{display:grid;grid-template-columns:4.2em 1fr;gap:10px;padding:10px 16px;border-bottom:1px dashed var(--line)}
+li:last-child{border:0}
+.yr{font:400 17px/1.6 "DotGothic16",monospace;color:var(--mustard);-webkit-text-stroke:.4px var(--ink)}
+.ti{font-weight:700;overflow-wrap:anywhere}
+.ti a{color:var(--ink);text-decoration-color:var(--mustard);text-underline-offset:3px}
+.ro{display:block;font-size:13px;color:var(--sub);font-weight:400}
+.note{font-size:12px;color:var(--sub);margin-top:16px}
+</style>
+</head>
+<body>
+<main>
+  <h1>出演映画しらべ</h1>
+  <p class="lead">人名を入れると、Wikipedia（日本語版）の記事から出演映画の一覧を作ります。</p>
+
+  <form id="f">
+    <input id="q" type="search" placeholder="例：役所広司" autocomplete="off" aria-label="人名" required>
+    <button id="go" type="submit">しらべる</button>
+  </form>
+
+  <div id="cands" class="cands" role="group" aria-label="検索候補"></div>
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <div id="out"></div>
+
+  <p class="note">一覧は記事の「映画」見出しの内容をそのまま整理したものです。記事の書き方によっては、抜けや並びの違いがあります。</p>
+</main>
+
+<script>
+const API = "https://ja.wikipedia.org/w/api.php";
+const BASE = "https://ja.wikipedia.org";
+const $ = id => document.getElementById(id);
+let token = 0;
+
+async function api(params){
+  const u = new URL(API);
+  Object.entries({format:"json", formatversion:"2", origin:"*", ...params})
+    .forEach(([k,v]) => u.searchParams.set(k, v));
+  const r = await fetch(u);
+  if(!r.ok) throw new Error("通信に失敗しました（" + r.status + "）");
+  return r.json();
+}
+
+$("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  const name = $("q").value.trim();
+  if(!name) return;
+  const my = ++token;
+  setBusy(true); $("out").innerHTML = ""; $("cands").innerHTML = "";
+  $("status").textContent = "「" + name + "」を検索しています…";
+  try{
+    const res = await api({action:"query", list:"search", srsearch:name, srlimit:"5"});
+    if(my !== token) return;
+    const hits = res.query.search;
+    if(!hits.length){ $("status").textContent = "「" + name + "」に当てはまる記事が見つかりませんでした。表記を変えて試してください。"; return; }
+    $("cands").innerHTML = "";
+    hits.forEach((h,i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = h.title;
+      b.setAttribute("aria-pressed", i === 0);
+      b.onclick = () => { [...$("cands").children].forEach(c => c.setAttribute("aria-pressed", c === b)); load(h.title); };
+      $("cands").appendChild(b);
+    });
+    await load(hits[0].title);
+  }catch(err){
+    $("status").textContent = "うまく取得できませんでした：" + err.message;
+  }finally{ setBusy(false); }
+});
+
+function setBusy(v){ $("go").disabled = v; }
+
+async function load(title){
+  const my = ++token;
+  $("out").innerHTML = "";
+  $("status").textContent = "「" + title + "」の記事を読み込んでいます…";
+  try{
+    const d = await api({action:"parse", page:title, prop:"text", redirects:"1", disableeditsection:"1"});
+    if(my !== token) return;
+    let items = extract(d.parse.text);
+    const seen = new Set();
+    items = items.filter(x => { const k = x.title + x.year; if(seen.has(k)) return false; seen.add(k); return true; });
+    items.sort((a,b) => (a.year||9999) - (b.year||9999));
+    if(!items.length){
+      $("status").innerHTML = "この記事から映画の出演作品を読み取れませんでした。<a href=\"" + BASE + "/wiki/" + encodeURIComponent(title) + "\" target=\"_blank\" rel=\"noopener\">記事を開く</a>";
+      return;
+    }
+    $("status").textContent = "";
+    render(title, items);
+  }catch(err){
+    $("status").textContent = "うまく取得できませんでした：" + err.message;
+  }
+}
+
+// 「映画」の見出しの下だけを対象にする。監督・受賞・テレビなどの見出しの下は除く。
+const FILM_EXCL = /監督|脚本|プロデュ|製作|演出|賞|祭/;
+const OTHER_EXCL = /監督|脚本|プロデュ|製作|演出|受賞|賞|祭|作詞|作曲|音楽|楽曲|CM|広告|テレビ|ドラマ|舞台|ラジオ|配信|ネット|バラエティ|書籍|写真集|ゲーム|ミュージック|PV|MV|脚注|出典|関連項目|外部リンク|参考文献/;
+const eligible = st => st.some(h => /映画/.test(h.text)) &&
+  st.every(h => /映画/.test(h.text) ? !FILM_EXCL.test(h.text) : !OTHER_EXCL.test(h.text));
+
+function extract(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("sup.reference, style, script, .mw-editsection, .noprint, .navbox, .reflist, .references, .mw-references-wrap, .toc, #toc, .infobox, .sidebar, .hatnote, .thumb, figure, .catlinks, .metadata").forEach(n => n.remove());
+  const out = [];
+  const norm = t => t.replace(/（/g,"(").replace(/）/g,")");
+  const clean = t => norm(t).replace(/\s+/g," ").replace(/\[\d+\]/g,"").trim();
+  const linkOf = el => {
+    const a = [...el.querySelectorAll("a[href^='/wiki/']")].find(a => !a.classList.contains("new") && !/^\/wiki\/(File|ファイル|Category|Help|Wikipedia|特別)/.test(a.getAttribute("href")) && !/^\d{4}年$/.test(a.textContent.trim()));
+    return a ? BASE + a.getAttribute("href") : "";
+  };
+  const stack = [];
+  doc.body.querySelectorAll("h2,h3,h4,h5,li,tr").forEach(el => {
+    const tag = el.tagName;
+    if(/^H[2-5]$/.test(tag)){
+      const lv = +tag[1];
+      while(stack.length && stack[stack.length-1].lv >= lv) stack.pop();
+      stack.push({lv, text: clean(el.textContent)});
+      return;
+    }
+    if(!eligible(stack)) return;
+
+    if(tag === "LI"){
+      if(el.closest("table")) return;
+      const c = el.cloneNode(true);
+      c.querySelectorAll("ul,ol").forEach(n => n.remove());
+      const text = clean(c.textContent);
+      if(!text || text.length > 200) return;
+      const ym = text.match(/^\(?(\d{4})年/) || text.match(/\((\d{4})年[^)]*\)/);
+      if(!ym) return;
+      const year = parseInt(ym[1],10);
+      const rest = text.replace(/^\(?\d{4}年\)?\s*[-－―–:：、]?\s*/, "");
+      let title, role = "";
+      const m = rest.match(/^[『「]([^』」]+)[』」]\s*(?:\(\d{4}年[^)]*\))?\s*[-－―–]?\s*(.*)$/);
+      if(m){ title = m[1]; role = m[2]; }
+      else {
+        const parts = rest.split(/\s[-－―–]\s/);
+        title = parts.shift().replace(/\(\d{4}年[^)]*\)/,"").replace(/[『』]/g,"").trim();
+        role = parts.join("、");
+      }
+      if(!title) return;
+      out.push({year, title, role, url: linkOf(el)});
+      return;
+    }
+
+    // 表の行
+    if(!el.querySelector("td") || el.closest("table table")) return;
+    const cells = [...el.querySelectorAll("td,th")];
+    if(cells.length < 2) return;
+    const texts = cells.map(c => clean(c.textContent));
+    const yi = texts.findIndex(t => /^\(?\d{4}年?\)?/.test(t) && t.length < 14);
+    if(yi < 0) return;
+    const rest = cells.filter((c,i) => i !== yi && texts[i]);
+    if(!rest.length) return;
+    out.push({
+      year: parseInt(texts[yi].match(/\d{4}/)[0],10),
+      title: clean(rest[0].textContent).replace(/[『』]/g,""),
+      role: rest.slice(1).map(c => clean(c.textContent)).join(" / "),
+      url: linkOf(rest[0])
+    });
+  });
+  return out;
+}
+
+function esc(s){ return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function render(title, items){
+  const rows = items.map(x => {
+    const t = x.url ? '<a href="' + x.url + '" target="_blank" rel="noopener">' + esc(x.title) + '</a>' : esc(x.title);
+    return '<li><span class="yr">' + (x.year || "—") + '</span><span class="ti">' + t +
+      (x.role ? '<span class="ro">' + esc(x.role) + '</span>' : '') + '</span></li>';
+  }).join("");
+  $("out").innerHTML =
+    '<section class="ticket"><header><h2>' + esc(title) + '</h2><span>' + items.length + ' 本</span></header>' +
+    '<div class="tools"><a href="' + BASE + '/wiki/' + encodeURIComponent(title) + '" target="_blank" rel="noopener">Wikipediaの記事</a>' +
+    '<button type="button" id="cp">一覧をコピー</button></div><ol>' + rows + '</ol></section>';
+  $("cp").onclick = async () => {
+    const txt = title + "の出演映画\n" + items.map(x => (x.year||"----") + "年 " + x.title + (x.role ? "（" + x.role + "）" : "")).join("\n");
+    try{ await navigator.clipboard.writeText(txt); $("cp").textContent = "コピーしました"; }
+    catch{ $("cp").textContent = "コピーできませんでした"; }
+    setTimeout(() => $("cp").textContent = "一覧をコピー", 1800);
+  };
+}
+</script>
+</body>
+</html>
